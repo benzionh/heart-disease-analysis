@@ -1,0 +1,200 @@
+---
+title: "model"
+author: "benzi"
+date: '2022-12-10'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+#setwd("~/Heart disease analysis")
+library("tidyverse")
+data<-read.csv("heart.csv")
+head(data)
+```
+
+
+```{r}
+summary(data)
+```
+
+
+```{r}
+colnames(data)
+```
+## Data transformation
+```{r}
+data2<-data %>%
+  mutate(sex = if_else(sex==1,"MALE","FEMALE"),
+         fbs = if_else(fbs==1,">120","<=120"),
+         exang = if_else(exang==1,"YES","NO"),
+         cp = if_else(cp==1,"ATYPICAL ANGINA",
+                      if_else(cp==2,"NON-ANGINAL PAIN","ASYMPTOMATIC")),
+         restecg = if_else(restecg==0,"NORMAL",
+                           if_else(restecg==1,"ABNORMALITY","PROBABLE OR DEFINITE")),
+         slope = as.factor(slope),
+         ca = as.factor(ca),
+         thal = as.factor(thal),
+         target = if_else(target==1,"YES","NO")
+         ) %>%
+  mutate_if(is.character,as.factor) %>%
+  dplyr::select(target,sex,fbs,exang,cp,restecg,slope,ca,thal,everything())
+```
+
+## Data visualization
+# Barplot for target
+```{r}
+ggplot(data2,aes(x=target,fill=target))+
+  geom_bar()+
+  xlab("Heart disease")+
+  ylab("count")+
+  ggtitle("Presence & Abscence of Heart disese")+
+  scale_fill_discrete(name="Heart disease", labels = c("Abscence","Presence"))
+prop.table(table(data2$target))
+```
+# Count of the frequency of age
+```{r}
+data2%>%
+  group_by(ï..age) %>%
+  count() %>%
+  filter(n>10) %>%
+  ggplot()+
+  geom_col(aes(ï..age,n),fill="green")+
+  ggtitle("Age analysis")+
+  xlab("Age")+
+  ylab("Age count")
+```
+# Compare blood pressure across chest pain
+```{r}
+data2 %>%
+  ggplot(aes(x=sex,y=trestbps))+
+  geom_boxplot(fill = "Purple")+
+  xlab("sex")+
+  ylab("BP")+
+  facet_grid(~cp)
+```
+```{r}
+data2 %>%
+  ggplot(aes(x=sex,y=chol))+
+  geom_boxplot(fill = "orange")+
+  xlab("sex")+
+  ylab("BP")+
+  facet_grid(~cp)
+```
+## Correlation
+```{r}
+library(corrplot)
+library(ggplot2)
+cor_heart<-cor(data2[,10:14])
+cor_heart
+corrplot(cor_heart,method = "square",type = "upper")
+```
+## Check for null values
+```{r}
+s = sum(is.na(data2));s
+is.null(data2)
+```
+## Training and Testing data
+```{r}
+library(caret)
+set.seed(10)
+colnames(data2)
+inTrainRows <- createDataPartition(data2$target,
+                                   p=0.7,list=FALSE)
+trainData <- data2[inTrainRows,]
+testdata <- data2[-inTrainRows,]
+nrow(trainData)/(nrow(testdata)+nrow(trainData))
+# create 2 lists
+AUC = list()
+Accuracy = list()
+```
+## Logistic Regression
+```{r}
+set.seed(10)
+logRegModel <- train(target ~ .,
+                     data=trainData,
+                     method = 'glm',
+                     family = 'binomial')
+logRegPrediction <- predict(logRegModel, testdata)
+logRegPredictionProb <- predict(logRegModel,
+                                testdata,
+                                type='prob')[2]
+logregConfMat <- confusionMatrix(logRegPrediction,
+                                 testdata[,"target"])
+# RDC curve
+library(pROC)
+AUC$logReg <- roc(as.numeric(testdata$target),
+                  as.numeric(as.matrix(logRegPredictionProb)))$auc
+# find names with str(logRegConfMat)
+Accuracy$logReg <- logregConfMat$overall['Accuracy']
+```
+## Support Vector Machine
+```{r}
+fitControl <- trainControl(method = "repeatedcv",
+                           number = 10,
+                           repeats = 10,
+                           classProbs = TRUE,
+                           summaryFunction = twoClassSummary)
+set.seed(10)
+svmModel <- train(target ~ .,
+                  data = trainData,
+                  method = "svmRadial",
+                  trControl = fitControl,
+                  preProcess = c("center", "scale"),
+                  tuneLength = 8,
+                  metric = "ROC")
+svmPrediction <- predict(svmModel, testdata)
+svmPredictionProb <- predict(svmModel,
+                             testdata,
+                             type='prob')[2]
+svmConfMat <- confusionMatrix(svmPrediction,
+                              testdata[,"target"])
+# RDC curve 
+AUC$svm <- roc(as.numeric(testdata$target),
+               as.numeric(as.numeric(as.matrix(svmPredictionProb))))$auc
+Accuracy$svm <- svmConfMat$overall['Accuracy']
+```
+## Random Forest
+```{r}
+library(randomForest)
+set.seed(10)
+RFModel <- randomForest(target ~ .,
+                        data = trainData,
+                        importance = TRUE,
+                        ntree = 200)
+# varImpPlot(RFModel)
+RFPrediction <- predict(RFModel,
+                        testdata)
+RFPredictionProb <- predict(RFModel,
+                            testdata,
+                            type = "prob")[,2]
+RFConfMat <- confusionMatrix(RFPrediction,
+                             testdata[,"target"])
+# RDC curve 
+AUC$RF <- roc(as.numeric(testdata$target),
+               as.numeric(as.numeric(as.matrix(RFPredictionProb))))$auc
+Accuracy$RF <- RFConfMat$overall['Accuracy']
+```
+## Comparison of AUC and Accuracy
+```{r}
+row.names <- names(Accuracy)
+col.names <- c("AUC","Accuracy")
+cbind(as.data.frame(matrix(c(AUC,Accuracy),nrow = 3,ncol = 2,
+                           dimnames = list(row.names,col.names))))
+```
+```{r}
+summary(logRegModel)$coeff
+```
+## Confusion Matrix
+```{r}
+logregConfMat
+```
+# the p-value is small, reject the proposed hypothesis, accept the alternative hypothesis
+```{r}
+svmConfMat
+```
+```{r}
+RFConfMat
+```
+
